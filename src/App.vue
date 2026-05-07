@@ -1,160 +1,278 @@
 <script setup lang="ts">
-import { ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { readDir, readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
+import { join } from '@tauri-apps/api/path';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import NavBar from './components/NavBar.vue';
+import SideBar from './components/SideBar.vue';
+import Editor from './components/Editor.vue';
 
-const greetMsg = ref("");
-const name = ref("");
-
-async function greet() {
-  // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-  greetMsg.value = await invoke("greet", { name: name.value });
+interface FileItem {
+  name: string;
+  path: string;
+  isDirectory: boolean;
 }
+
+interface Tab {
+  path: string;
+  name: string;
+  content: string;
+  isDirty: boolean;
+}
+
+const files = ref<FileItem[]>([]);
+const currentPath = ref('');
+const pathInput = ref('');
+const loading = ref(false);
+const error = ref('');
+
+const history = ref<string[]>([]);
+const historyPos = ref(-1);
+
+const openTabs = ref<Tab[]>([]);
+const activeTabIndex = ref(-1);
+
+const canGoBack = computed(() => historyPos.value > 0);
+const canGoForward = computed(() => historyPos.value < history.value.length - 1);
+const activeFilePath = computed(() =>
+  activeTabIndex.value >= 0 ? openTabs.value[activeTabIndex.value]?.path : null
+);
+const appWindow = getCurrentWindow();
+
+const activeTab = computed(() =>
+  activeTabIndex.value >= 0 ? openTabs.value[activeTabIndex.value] : null
+);
+
+const activeContent = computed({
+  get: () => activeTab.value?.content ?? '',
+  set: (val: string) => {
+    if (activeTab.value) {
+      activeTab.value.content = val;
+      activeTab.value.isDirty = true;
+    }
+  }
+});
+
+function pushHistory(path: string) {
+  if (historyPos.value < history.value.length - 1) {
+    history.value = history.value.slice(0, historyPos.value + 1);
+  }
+  history.value.push(path);
+  historyPos.value = history.value.length - 1;
+}
+
+async function toggleFullscreen() {
+  const isFullscreen = await appWindow.isFullscreen();
+  await appWindow.setFullscreen(!isFullscreen);
+}
+
+function handleKeydown(event: KeyboardEvent) {
+  if (event.key === 'F11') {
+    event.preventDefault();
+    toggleFullscreen();
+  }
+}
+
+async function loadDirectory(targetPath: string, addHistory = true) {
+  loading.value = true;
+  error.value = '';
+  try {
+    currentPath.value = targetPath;
+    pathInput.value = targetPath;
+    const entries = await readDir(targetPath);
+    const processed = await Promise.all(
+      entries.map(async (entry) => {
+        const fullPath = await join(targetPath, entry.name);
+        return {
+          name: entry.name,
+          path: fullPath,
+          isDirectory: entry.isDirectory
+        } as FileItem;
+      })
+    );
+    files.value = processed.sort(
+      (a, b) => Number(b.isDirectory) - Number(a.isDirectory)
+    );
+    if (addHistory) pushHistory(targetPath);
+  } catch (err: any) {
+    error.value = err?.message ?? String(err);
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function navigateToPath(path: string) {
+  if (!path) return;
+  await loadDirectory(path, true);
+}
+
+function goBack() {
+  if (!canGoBack.value) return;
+  historyPos.value--;
+  loadDirectory(history.value[historyPos.value], false);
+}
+
+function goForward() {
+  if (!canGoForward.value) return;
+  historyPos.value++;
+  loadDirectory(history.value[historyPos.value], false);
+}
+
+async function goHome() {
+  const { homeDir } = await import('@tauri-apps/api/path');
+  const home = await homeDir();
+  await navigateToPath(home);
+}
+
+function refresh() {
+  loadDirectory(currentPath.value, false);
+}
+
+async function handleFileClick(file: FileItem) {
+  if (file.isDirectory) {
+    await navigateToPath(file.path);
+  } else {
+    await openFileInTab(file);
+  }
+}
+
+async function openFileInTab(file: FileItem) {
+  const existingIdx = openTabs.value.findIndex((t) => t.path === file.path);
+  if (existingIdx !== -1) {
+    activeTabIndex.value = existingIdx;
+    return;
+  }
+  try {
+    const content = await readTextFile(file.path);
+    const newTab: Tab = {
+      path: file.path,
+      name: file.name,
+      content,
+      isDirty: false
+    };
+    openTabs.value.push(newTab);
+    activeTabIndex.value = openTabs.value.length - 1;
+  } catch (err: any) {
+    error.value = `Cannot open ${file.name}: ${err?.message ?? err}`;
+  }
+}
+
+function closeTab(index: number) {
+  if (index < 0 || index >= openTabs.value.length) return;
+  openTabs.value.splice(index, 1);
+  if (activeTabIndex.value >= openTabs.value.length) {
+    activeTabIndex.value = openTabs.value.length - 1;
+  }
+  if (openTabs.value.length === 0) activeTabIndex.value = -1;
+}
+
+function selectTab(index: number) {
+  if (index >= 0 && index < openTabs.value.length) {
+    activeTabIndex.value = index;
+  }
+}
+
+async function saveFile() {
+  if (activeTabIndex.value < 0) return;
+  const tab = openTabs.value[activeTabIndex.value];
+  try {
+    await writeTextFile(tab.path, tab.content);
+    tab.isDirty = false;
+  } catch (err: any) {
+    error.value = `Save failed: ${err?.message ?? err}`;
+  }
+}
+
+async function createNewFile() {
+  const filename = prompt('Enter file name (e.g., note.txt or page.html):');
+  if (!filename) return;
+  const safeName = filename.includes('.') ? filename : `${filename}.txt`;
+  const filePath = await join(currentPath.value, safeName);
+  try {
+    await writeTextFile(filePath, '');
+    await refresh();
+    const createdFile: FileItem = {
+      name: safeName,
+      path: filePath,
+      isDirectory: false
+    };
+    await openFileInTab(createdFile);
+  } catch (err: any) {
+    error.value = `Failed to create file: ${err?.message ?? err}`;
+  }
+}
+
+onMounted(async () => {
+  const { homeDir } = await import('@tauri-apps/api/path');
+  const home = await homeDir();
+  await loadDirectory(home, true);
+  window.addEventListener('keydown', handleKeydown, true);
+});
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeydown, true);
+});
 </script>
 
 <template>
-  <main class="container">
-    <h1>Welcome to Tauri + Vue</h1>
-
-    <div class="row">
-      <a href="https://vite.dev" target="_blank">
-        <img src="/vite.svg" class="logo vite" alt="Vite logo" />
-      </a>
-      <a href="https://tauri.app" target="_blank">
-        <img src="/tauri.svg" class="logo tauri" alt="Tauri logo" />
-      </a>
-      <a href="https://vuejs.org/" target="_blank">
-        <img src="./assets/vue.svg" class="logo vue" alt="Vue logo" />
-      </a>
+  <div class="browser-frame">
+    <NavBar
+      :path-input="pathInput"
+      :can-go-back="canGoBack"
+      :can-go-forward="canGoForward"
+      @update:path-input="pathInput = $event"
+      @navigate="navigateToPath(pathInput)"
+      @back="goBack"
+      @forward="goForward"
+      @home="goHome"
+      @refresh="refresh"
+    />
+    <div class="main-area">
+      <SideBar
+        :files="files"
+        :loading="loading"
+        :error="error"
+        :active-file-path="activeFilePath"
+        @file-click="handleFileClick"
+        @create-file="createNewFile"
+      />
+      <Editor
+        :tabs="openTabs"
+        :active-tab-index="activeTabIndex"
+        :active-file-path="activeFilePath"
+        :content="activeContent"
+        @select-tab="selectTab"
+        @close-tab="closeTab"
+        @update:content="activeContent = $event"
+        @save="saveFile"
+      />
     </div>
-    <p>Click on the Tauri, Vite, and Vue logos to learn more.</p>
-
-    <form class="row" @submit.prevent="greet">
-      <input id="greet-input" v-model="name" placeholder="Enter a name..." />
-      <button type="submit">Greet</button>
-    </form>
-    <p>{{ greetMsg }}</p>
-  </main>
+  </div>
 </template>
 
-<style scoped>
-.logo.vite:hover {
-  filter: drop-shadow(0 0 2em #747bff);
-}
-
-.logo.vue:hover {
-  filter: drop-shadow(0 0 2em #249b73);
-}
-
-</style>
 <style>
-:root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
-
-  color: #0f0f0f;
-  background-color: #f6f6f6;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  -webkit-text-size-adjust: 100%;
-}
-
-.container {
+body {
   margin: 0;
-  padding-top: 10vh;
+  padding: 0;
+  overflow: hidden;
+}
+</style>
+
+<style scoped>
+.browser-frame {
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  text-align: center;
+  height: 100vh;
+  width: 100vw;
+  background: #1e1e1e;
+  color: #d4d4d4;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  overflow: hidden;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: 0.75s;
-}
-
-.logo.tauri:hover {
-  filter: drop-shadow(0 0 2em #24c8db);
-}
-
-.row {
+.main-area {
   display: flex;
-  justify-content: center;
+  flex: 1;
+  overflow: hidden;
 }
-
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-
-a:hover {
-  color: #535bf2;
-}
-
-h1 {
-  text-align: center;
-}
-
-input,
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  transition: border-color 0.25s;
-  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
-}
-
-button {
-  cursor: pointer;
-}
-
-button:hover {
-  border-color: #396cd8;
-}
-button:active {
-  border-color: #396cd8;
-  background-color: #e8e8e8;
-}
-
-input,
-button {
-  outline: none;
-}
-
-#greet-input {
-  margin-right: 5px;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
-  }
-
-  a:hover {
-    color: #24c8db;
-  }
-
-  input,
-  button {
-    color: #ffffff;
-    background-color: #0f0f0f98;
-  }
-  button:active {
-    background-color: #0f0f0f69;
-  }
-}
-
 </style>
