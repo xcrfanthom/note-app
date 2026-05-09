@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onUnmounted, computed, ref } from 'vue'
+import {computed, onBeforeUnmount, ref } from 'vue'
 import TabsBar from './TabsBar.vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
@@ -54,17 +54,17 @@ function onResize(e: MouseEvent) {
   splitPercent.value = Math.min(Math.max(percent, 20), 80)
 }
 
+onBeforeUnmount(() => {
+  document.removeEventListener('mousemove', onResize)
+  document.removeEventListener('mouseup', stopResize)
+})
+
 function stopResize() {
   isResizing = false
   isDragging.value = false
   document.removeEventListener('mousemove', onResize)
   document.removeEventListener('mouseup', stopResize)
 }
-
-onUnmounted(() => {
-  document.removeEventListener('mousemove', onResize)
-  document.removeEventListener('mouseup', stopResize)
-})
 </script>
 
 <template>
@@ -244,21 +244,26 @@ onUnmounted(() => {
   overflow-y: auto;
   height: 100%;
   box-sizing: border-box;
-}
-
-.markdown-preview :deep(h1),
-.markdown-preview :deep(h2),
-.markdown-preview :deep(h3) {
-  color: #fff;
-  margin-top: 1.2em;
-  margin-bottom: 0.4em;
-  border-bottom: 1px solid #3c3c3c;
-  padding-bottom: 4px;
-}
-
-.markdown-preview :deep(p) {
-  margin: 0.6em 0;
+  font-size: 14px;
   line-height: 1.7;
+}
+
+.markdown-preview :deep(h1) {
+  font-size: 1.8em;
+  color: #fff;
+  margin: 0.8em 0 0.4em;
+}
+
+.markdown-preview :deep(h2) {
+  font-size: 1.4em;
+  color: #fff;
+  margin: 0.8em 0 0.4em;
+}
+
+.markdown-preview :deep(h3) {
+  font-size: 1.2em;
+  color: #fff;
+  margin: 0.8em 0 0.4em;
 }
 
 .markdown-preview :deep(code) {
@@ -266,8 +271,6 @@ onUnmounted(() => {
   padding: 2px 6px;
   border-radius: 3px;
   font-family: 'Consolas', monospace;
-  font-size: 13px;
-  color: #f6f6f6;
 }
 
 .markdown-preview :deep(pre) {
@@ -283,33 +286,48 @@ onUnmounted(() => {
 }
 
 .markdown-preview :deep(blockquote) {
+  background: #2d2d2d;
   border-left: 3px solid #007acc;
   margin: 0;
   padding-left: 16px;
+  padding-bottom: 2px;
   color: #888;
 }
 
 .markdown-preview :deep(a) {
   color: #007acc;
+  text-decoration: none;
 }
 
-.markdown-preview :deep(ul),
-.markdown-preview :deep(ol) {
-  padding-left: 24px;
+.markdown-preview :deep(a:hover) {
+  text-decoration: underline;
 }
 
 .markdown-preview :deep(table) {
   border-collapse: collapse;
-  width: 100%;
-}
-
-.markdown-preview :deep(th),
-.markdown-preview :deep(td) {
-  border: 1px solid #3c3c3c;
-  padding: 6px 12px;
+  margin: 1em 0;
 }
 
 .markdown-preview :deep(th) {
   background: #2d2d2d;
+  color: #fff;
+  font-weight: 600;
+  text-align: left;
+  padding: 8px 12px;
+  border: 1px solid #3c3c3c;
+}
+
+.markdown-preview :deep(td) {
+  padding: 8px 12px;
+  border: 1px solid #3c3c3c;
+  vertical-align: top;
+}
+
+.markdown-preview :deep(tr:nth-child(even)) {
+  background: #2a2a2a;
+}
+
+.markdown-preview :deep(tr:hover) {
+  background: #2f2f2f;
 }
 </style>
