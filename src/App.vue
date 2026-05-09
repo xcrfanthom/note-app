@@ -6,6 +6,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import NavBar from './components/NavBar.vue';
 import SideBar from './components/SideBar.vue';
 import Editor from './components/Editor.vue';
+import MarkdownEditor from './components/MarkdownEditor.vue';
 
 interface FileItem {
   name: string;
@@ -18,6 +19,7 @@ interface Tab {
   name: string;
   content: string;
   isDirty: boolean;
+  type?: 'text' | 'rich' | 'markdown' | 'tex' | 'draw';
 }
 
 const files = ref<FileItem[]>([]);
@@ -52,6 +54,10 @@ const activeContent = computed({
     }
   }
 });
+
+const activeTabType = computed(() => 
+  openTabs.value[activeTabIndex.value]?.type ?? 'text'
+);
 
 function pushHistory(path: string) {
   if (historyPos.value < history.value.length - 1) {
@@ -144,11 +150,13 @@ async function openFileInTab(file: FileItem) {
   }
   try {
     const content = await readTextFile(file.path);
+    const ext = file.name.split('.').pop()?.toLowerCase();
     const newTab: Tab = {
       path: file.path,
       name: file.name,
       content,
-      isDirty: false
+      isDirty: false,
+      type: ext === 'md' ? 'markdown' : ext === 'tex' ? 'tex' : 'text'
     };
     openTabs.value.push(newTab);
     activeTabIndex.value = openTabs.value.length - 1;
@@ -237,6 +245,18 @@ onUnmounted(() => {
         @create-file="createNewFile"
       />
       <Editor
+        v-if="activeTabType === 'text'"
+        :tabs="openTabs"
+        :active-tab-index="activeTabIndex"
+        :active-file-path="activeFilePath"
+        :content="activeContent"
+        @select-tab="selectTab"
+        @close-tab="closeTab"
+        @update:content="activeContent = $event"
+        @save="saveFile"
+      />
+      <MarkdownEditor
+        v-else-if="activeTabType === 'markdown'"
         :tabs="openTabs"
         :active-tab-index="activeTabIndex"
         :active-file-path="activeFilePath"

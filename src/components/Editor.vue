@@ -6,7 +6,7 @@ interface Tab {
   name: string;
   content: string;
   isDirty: boolean;
-  type?: 'text' | 'rich';
+  type?: 'text' | 'rich' | 'markdown' | 'tex' | 'draw';
 }
 
 defineProps<{
